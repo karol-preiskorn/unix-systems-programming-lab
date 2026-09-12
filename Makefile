@@ -6,20 +6,21 @@
 
 CC ?= gcc
 CPPFLAGS ?=
-CFLAGS ?= -Wall -Wextra -std=c99 -g
+CFLAGS ?= -Wall -Wextra -Wpedantic -Wformat=2 -Wshadow -Wconversion -std=c99 -g
 LDFLAGS ?=
 LDLIBS ?=
 PREFIX ?= /usr/local
 DESTDIR ?=
 INSTALL ?= install
+DOXYGEN ?= doxygen
 SRCDIR := src
 BINDIR := bin
 DOCDIR := html
 
 # Source files
 SOURCES := $(wildcard $(SRCDIR)/*.c)
-# Generate executable names from source files
-EXECUTABLES := $(patsubst $(SRCDIR)/%.c,$(BINDIR)/%,$(SOURCES))
+PROGRAMS := example-1 exec_inheritance fifo_pipe fork_env_z1 proc_by_user
+EXECUTABLES := $(addprefix $(BINDIR)/,$(PROGRAMS))
 
 # Default target
 .PHONY: all
@@ -29,9 +30,16 @@ all: $(EXECUTABLES)
 $(BINDIR):
 	@mkdir -p $(BINDIR)
 
-# Compile each C source file into an executable
+# Compile standalone C programs
 $(BINDIR)/%: $(SRCDIR)/%.c Makefile | $(BINDIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LDLIBS)
+	@echo "✓ Built $@"
+
+# fifo_pipe uses the reusable FIFO transport module
+$(BINDIR)/fifo_pipe: $(SRCDIR)/fifo_pipe.c $(SRCDIR)/fifo_io.c \
+		$(SRCDIR)/fifo_io.h Makefile | $(BINDIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ \
+		$(SRCDIR)/fifo_pipe.c $(SRCDIR)/fifo_io.c $(LDLIBS)
 	@echo "✓ Built $@"
 
 # Run all programs
@@ -43,6 +51,10 @@ run: all
 	@$(BINDIR)/fork_env_z1
 	@echo "📌 Running example-1..."
 	@$(BINDIR)/example-1
+	@echo "📌 Running exec inheritance test..."
+	@$(BINDIR)/exec_inheritance
+	@echo "📌 Listing processes for the current user..."
+	@$(BINDIR)/proc_by_user "$$(id -un)"
 
 # Run FIFO pipe program
 .PHONY: run-fifo
@@ -62,12 +74,24 @@ run-example: $(BINDIR)/example-1
 	@echo "📌 Running example-1..."
 	@$<
 
+# Run exec inheritance test
+.PHONY: run-exec
+run-exec: $(BINDIR)/exec_inheritance
+	@echo "📌 Running exec inheritance test..."
+	@$<
+
+# List processes for USER or the current user
+.PHONY: run-proc
+run-proc: $(BINDIR)/proc_by_user
+	@echo "📌 Listing processes for $(or $(USER),$$(id -un))..."
+	@$< "$(or $(USER),$$(id -un))"
+
 # Clean build artifacts
 .PHONY: clean
 clean:
 	@rm -rf $(BINDIR)
 	@rm -f $(SRCDIR)/*.o
-	@rm -f temp.fifo
+	@rm -f temp.fifo temp.fifo.lock
 	@echo "✓ Cleaned build artifacts"
 
 # Clean all including documentation
@@ -87,6 +111,7 @@ help:
 	@echo "  make check         - Check all C sources without linking"
 	@echo "  make test          - Build and run all programs"
 	@echo "  make sanitize      - Rebuild and test with ASan and UBSan"
+	@echo "  make docs          - Generate Doxygen documentation"
 	@echo "  make rebuild       - Clean and build all programs"
 	@echo "  make clean         - Remove build artifacts"
 	@echo "  make clean-all     - Remove all generated files"
@@ -96,6 +121,8 @@ help:
 	@echo "  make run-fifo      - Run FIFO pipe example"
 	@echo "  make run-fork      - Run fork environment test"
 	@echo "  make run-example   - Run example-1 program"
+	@echo "  make run-exec      - Run exec inheritance test"
+	@echo "  make run-proc      - List processes for USER"
 	@echo ""
 	@echo "Info targets:"
 	@echo "  make help          - Display this help message"
@@ -106,6 +133,8 @@ help:
 	@echo "Project Programs:"
 	@echo "  • fifo_pipe    - Named pipe (FIFO) communication example"
 	@echo "  • fork_env_z1  - Fork process and environment variables test"
+	@echo "  • exec_inheritance - Exec process attributes test"
+	@echo "  • proc_by_user - List Linux processes owned by a user"
 	@echo "  • example-1    - Basic example program"
 
 # Display project information
@@ -154,24 +183,16 @@ uninstall:
 		echo "✓ Removed $$(basename $$exe)"; \
 	done
 
-# Run all programs with detailed output
+# Run behavioral integration tests
 .PHONY: test
 test: all
 	@echo "🧪 Running tests..."
-	@echo ""
-	@echo "Test 1: FIFO communication"
-	@echo "=========================="
-	@$(BINDIR)/fifo_pipe
-	@echo ""
-	@echo "Test 2: Fork Environment"
-	@echo "========================"
-	@$(BINDIR)/fork_env_z1
-	@echo ""
-	@echo "Test 3: Basic fork example"
-	@echo "=========================="
-	@$(BINDIR)/example-1
-	@echo ""
-	@echo "✓ All tests completed"
+	@sh tests/run.sh
+
+# Generate API documentation
+.PHONY: docs
+docs:
+	@$(DOXYGEN) doxy.Doxyfile
 
 # Rebuild and run tests with runtime memory and undefined-behavior checks
 .PHONY: sanitize

@@ -1,35 +1,48 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+static void count(const char *role)
+{
+	int counter = 0;
+	int index;
+
+	for (index = 0; index < 5; ++index)
+		printf("%s process: counter=%d\n", role, ++counter);
+}
 
 int main(void)
 {
-printf("--beginning of program\n");
+	int child_status;
+	pid_t child_pid;
 
-int counter = 0;
-pid_t pid = fork();
+	printf("--beginning of program\n");
+	fflush(stdout);
 
-if (pid == 0)
-{
-// child process
-int i = 0;
-for (; i < 5; ++i) { printf("child process: counter=%d\n", ++counter); } } else if (pid > 0)
-{
-// parent process
-int j = 0;
-for (; j < 5; ++j)
-{
-printf("parent process: counter=%d\n", ++counter);
-}
-}
-else
-{
-// fork failed
-printf("fork() failed!\n");
-return 1;
-}
+	child_pid = fork();
+	if (child_pid == -1) {
+		perror("fork");
+		return EXIT_FAILURE;
+	}
 
-printf("--end of program--\n");
+	if (child_pid == 0) {
+		count("child");
+		printf("--end of child process--\n");
+		return EXIT_SUCCESS;
+	}
 
-return 0;
+	count("parent");
+	if (waitpid(child_pid, &child_status, 0) == -1) {
+		perror("waitpid");
+		return EXIT_FAILURE;
+	}
+	if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != EXIT_SUCCESS) {
+		fprintf(stderr, "child process failed\n");
+		return EXIT_FAILURE;
+	}
+
+	printf("--end of parent process--\n");
+	return EXIT_SUCCESS;
 }

@@ -1,2 +1,5 @@
 /Debug/
-bin
+/bin/
+/html/
+/latex/
+temp.fifo
