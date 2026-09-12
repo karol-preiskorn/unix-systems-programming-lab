@@ -1,165 +1,121 @@
-/**
- * Zadania
- * -------
- * z1: Napisz program, który pokazuje, które atrybuty procesu macierzystego są dziedziczone przez proces potomny  uruchomiony za pomocą funkcji fork(), które zaś otrzymują nową wartość.
- * z2: Napisz program, który pokazuje, które atrybuty procesu są zachowane przez proces po wykonaniu funkcji exec().
- * z3: Napisz program, który wyświetla identyfikator procesu (PID) i nazwę związanego z nim polecenia dla wszystkich procesów uruchomionych przez użytkownika podanego w wierszu wywołania programu. Wskazówka: informacje te można uzyskać przeglądając katalog /proc z plików (interesują nas katalogi, których właścicielem jest dany  użytkownik) i pliki /proc/PID/status
- *
- * Każdy proces charakteryzuje się pewnymi atrybutami. Należą do nich:
- * Identyfikator procesu PID
- * Identyfikator procesu macierzystego PPID
- * Rzeczywisty identyfikator właściciela procesu
- * Rzeczywisty identyfikator grupy procesu
- * Efektywny identyfikator właściciela procesu
- * Efektywny identyfikator grupy procesu
- * Katalog bieżący i katalog główny
- * Maska tworzenia pliku
- * Identyfikator sesji
- * Terminal sterujący
- * Deskryptory otwartych plików
- * Ustalenia dotyczące obsługi sygnałów
- * Ustawienia zmiennych środowiskowych
- * Ograniczenia zasobów
- *
- *
- * Potomek dziedziczy z procesu potomnego wiele własności:
- rzeczywisty identyfikator użytkownika, rzeczywisty identyfikator grupy, obowiązujący identyfikator użytkownika, obowiązujący identyfikator grupy,
- identyfikatory dodatkowych grup,
- identyfikator sesji,
- terminal sterujący,
- sygnalizator ustanowienia identyfikatora użytkownika oraz sygnalizator ustanowienia identyfikatora grupy,
- deskryptory otwartych plików (są kopiowane)
- bieżący katalog roboczy,
- katalog główny,
- maskę tworzenia plików,
- maskę sygnałów oraz dyspozycje obsługi sygnałów,
- sygnalizator zamykania przy wywołaniu funkcji exec (close-on-exec) dla wszystkich otwartych deskryptorów plików,
- środowisko,
- przyłączone segmenty pamięci wspólnej,
- ograniczenia zasobów systemowych.
- Są jednak pewne różnice między procesem macierzystym a potomnym:
- wartość powrotu z funkcji fork,
- różne identyfikatory procesów,
- inne identyfikatory procesów macierzystych - w procesie potomnym jest to identyfikator procesu macierzystego; w procesie macierzystym identyfikator procesu macierzystego nie zmienia się,
- w procesie potomnym wartości tms_utime, tms_cutime i tms_ustime są równe 0,
- potomek nie dziedziczy rygli plików, ustalonych w procesie macierzystym,
- w procesie potomnym są zerowane wszystkie zaległe alarmy,
- w procesie potomnym jest zerowany zbiór zaległych sygnałów.
- */
+#define _POSIX_C_SOURCE 200809L
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/resource.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-extern char** environ;
-char *prt_parent;
+extern char **environ;
 
-int glob = 1; 			// zewnętrzna zmienna
+static int global_value = 1;
 
-/* Prints the environment, one environment variable to a line, of the
- process given by PID. */
-char *print_process_environment(pid_t pid) {
-	int fd;
-	char filename[24];
-	char environment[8192];
-	size_t length;
-	char* next_var;
-	/* Generate the name of the environ file for the process. */
-	snprintf(filename, sizeof(filename), "/proc/%d/environ", (int) pid);
-	/* Read the contents of the file. */
-	fd = open(filename, O_RDONLY);
-	length = sizeof(environ);
-	printf("Size of environ: %d\n", length);
-	close(fd);
-	/* read does not NUL-terminate the buffer, so do it here. */
-	environment[length] = '\0';
-	/* Loop over variables. Variables are separated by NULs. */
-	next_var = environment;
-	while (next_var < environment + length) {
-		/* Print the variable. Each is NUL-terminated, so just treat it
-		 like an ordinary string. */
-		printf(">> %s\n", next_var);
-		/* Advance to the next variable. Since each variable is
-		 NUL-terminated, strlen counts the length of the next variable,
-		 not the entire variable list. */
-		next_var += strlen(next_var) + 1;
-	}
-	return (environment);
+static size_t environment_count(void)
+{
+	size_t count = 0;
+
+	while (environ[count] != NULL)
+		++count;
+
+	return count;
 }
 
-//int main(int argc, char* argv[]) {
-//pid_t pid = (pid_t) atoi (argv[1]);
-//print_process_environment (pid);
-///return 0;
-//}
+static mode_t current_umask(void)
+{
+	mode_t mask = umask(0);
 
-int main1(int argc, char **argv) {
-	int var = 100; 		        // zmienna automatyczna na stows
-	char **env = environ;		// środowisko parent
-	// zapamiętanie environ w tablicy
+	umask(mask);
+	return mask;
+}
 
-	printf("PROGRAM Z1\n\n");
-	printf("Zmienne srodowiskowe parent: ----------------------------\n");
-	while (*env) {
-		printf("%s\n", *env++);
+static void print_attributes(const char *role, int automatic_value,
+		int inherited_fd)
+{
+	char working_directory[4096];
+	struct rlimit open_file_limit;
+	const char *demo_environment = getenv("FORK_DEMO");
+
+	printf("%s process\n", role);
+	printf("  PID=%ld PPID=%ld session=%ld\n", (long) getpid(),
+		(long) getppid(), (long) getsid(0));
+	printf("  UID=%ld EUID=%ld GID=%ld EGID=%ld\n", (long) getuid(),
+		(long) geteuid(), (long) getgid(), (long) getegid());
+	if (getcwd(working_directory, sizeof(working_directory)) != NULL)
+		printf("  cwd=%s umask=%03o\n", working_directory,
+			(unsigned int) current_umask());
+	else
+		perror("getcwd");
+	printf("  global=%d automatic=%d inherited_fd=%d\n", global_value,
+		automatic_value, inherited_fd);
+	printf("  environment entries=%zu FORK_DEMO=%s\n", environment_count(),
+		demo_environment != NULL ? demo_environment : "(unset)");
+	if (getrlimit(RLIMIT_NOFILE, &open_file_limit) == 0)
+		printf("  open-file limit=%llu/%llu\n",
+			(unsigned long long) open_file_limit.rlim_cur,
+			(unsigned long long) open_file_limit.rlim_max);
+	else
+		perror("getrlimit");
+}
+
+int main(void)
+{
+	int automatic_value = 100;
+	int inherited_fd;
+	int child_status;
+	pid_t child_pid;
+
+	if (setenv("FORK_DEMO", "inherited", 1) == -1) {
+		perror("setenv");
+		return EXIT_FAILURE;
 	}
 
-	printf("---------------------------------------------------------\n");
+	inherited_fd = open("/dev/null", O_RDONLY);
+	if (inherited_fd == -1) {
+		perror("open /dev/null");
+		return EXIT_FAILURE;
+	}
 
-	//for (int i = 0; *env != NULL && gets(env[i]); i++)
-	//	prt_parent[i] = env[i];
+	print_attributes("Before fork", automatic_value, inherited_fd);
+	fflush(stdout);
 
-	pid_t pid = fork();
+	child_pid = fork();
+	if (child_pid == -1) {
+		perror("fork");
+		close(inherited_fd);
+		return EXIT_FAILURE;
+	}
 
-	if (pid == 0) {
-		// child process
-		glob++;
-		var++;
-		printf("child process: pid %d, ppid %d, getuid %d, geteuid %d, getgid %d, glob = %d, var = %d\n", getpid(), getppid(), getuid(), geteuid(), getgid(),
-				glob, var);
-
-		/**
-		 * wy swietlenie zmiennych środowiskowych różnych od parent
-		 */
-		printf("Zmienne srodowiskowe child różne od parent:\n");
-		char environment_1[8192];
-		char * prt_env = &environment_1;
-		prt_env = print_process_environment(pid);
-		char **env_child = environ;
-		printf("Size of *char: %d\n", sizeof(environ));
-
-		while (*env_child) {
-			printf("compare - %s %d\n", *env_child, strcmp(*env_child++, *env++));
-			//printf("%s -----\n", *env2++);
-			//if (strcmp(*env2, ++*env) == 0) {
-			//
-			//} else {
-			//printf("%s jest takie samo\n", *env2);
-			//}
-			//*env_child++;
-			//*env++;
+	if (child_pid == 0) {
+		++global_value;
+		++automatic_value;
+		print_attributes("Child", automatic_value, inherited_fd);
+		if (close(inherited_fd) == -1) {
+			perror("close inherited descriptor in child");
+			return EXIT_FAILURE;
 		}
-		printf("-------------------- x --------------------\n");
-
-	} else if (pid > 0) {
-		// parent process
-		printf("parent process: pid %d, ppid %d, getuid %d, geteuid %d, getgid %d, glob = %d, var = %d\n", getpid(), getppid(), getuid(), geteuid(), getgid(),
-				glob, var);
-	} else {
-		// fork failed
-		printf("fork() failed!\n");
-		return (1);
+		return EXIT_SUCCESS;
 	}
 
-	printf("-- end of program pid %d\n", getpid());
+	if (waitpid(child_pid, &child_status, 0) == -1) {
+		perror("waitpid");
+		close(inherited_fd);
+		return EXIT_FAILURE;
+	}
 
-	return (0);
+	print_attributes("Parent after child", automatic_value, inherited_fd);
+	if (close(inherited_fd) == -1) {
+		perror("close inherited descriptor in parent");
+		return EXIT_FAILURE;
+	}
+
+	if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != EXIT_SUCCESS) {
+		fprintf(stderr, "child process failed\n");
+		return EXIT_FAILURE;
+	}
+
+	return EXIT_SUCCESS;
 }
-

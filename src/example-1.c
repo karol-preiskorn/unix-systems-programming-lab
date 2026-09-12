@@ -1,20 +1,14 @@
-#include <stdio .h>
-#include <unistd .h>
-#include <stdlib .h>
-#include <string .h>
-#include <sys /types.h>
-#include </sys><sys /resource.h>
-#include <fcntl .h>
-#include <sys /stat.h>
-#include </sys><sys /types.h>
-#include <unistd .h>
-int main(int argc, char **argv)
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+int main(void)
 {
 printf("--beginning of program\n");
- 
+
 int counter = 0;
 pid_t pid = fork();
- 
+
 if (pid == 0)
 {
 // child process
@@ -34,8 +28,8 @@ else
 printf("fork() failed!\n");
 return 1;
 }
- 
+
 printf("--end of program--\n");
- 
+
 return 0;
 }

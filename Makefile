@@ -4,8 +4,14 @@
 # - Process Management (fork, exec)
 # - Environment Variables
 
-CC := gcc
-CFLAGS := -Wall -Wextra -std=c99 -g
+CC ?= gcc
+CPPFLAGS ?=
+CFLAGS ?= -Wall -Wextra -std=c99 -g
+LDFLAGS ?=
+LDLIBS ?=
+PREFIX ?= /usr/local
+DESTDIR ?=
+INSTALL ?= install
 SRCDIR := src
 BINDIR := bin
 DOCDIR := html
@@ -17,35 +23,32 @@ EXECUTABLES := $(patsubst $(SRCDIR)/%.c,$(BINDIR)/%,$(SOURCES))
 
 # Default target
 .PHONY: all
-all: directories $(EXECUTABLES)
+all: $(EXECUTABLES)
 
 # Create bin directory if it doesn't exist
-.PHONY: directories
-directories:
+$(BINDIR):
 	@mkdir -p $(BINDIR)
 
 # Compile each C source file into an executable
-$(BINDIR)/%: $(SRCDIR)/%.c
-	$(CC) $(CFLAGS) -o $@ $<
+$(BINDIR)/%: $(SRCDIR)/%.c Makefile | $(BINDIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LDLIBS)
 	@echo "✓ Built $@"
 
 # Run all programs
 .PHONY: run
 run: all
 	@echo "📌 Running FIFO example..."
-	@timeout 5 $(BINDIR)/fifo_pipe -r & \
-	sleep 1 && \
-	$(BINDIR)/fifo_pipe -w || true
-	@wait
+	@$(BINDIR)/fifo_pipe
+	@echo "📌 Running fork environment test..."
+	@$(BINDIR)/fork_env_z1
+	@echo "📌 Running example-1..."
+	@$(BINDIR)/example-1
 
 # Run FIFO pipe program
 .PHONY: run-fifo
 run-fifo: $(BINDIR)/fifo_pipe
 	@echo "📌 Running FIFO example..."
-	@timeout 5 $< -r & \
-	sleep 1 && \
-	$< -w || true
-	@wait
+	@$<
 
 # Run fork environment test
 .PHONY: run-fork
@@ -70,7 +73,7 @@ clean:
 # Clean all including documentation
 .PHONY: clean-all
 clean-all: clean
-	@rm -rf $(DOCDIR) doxy.Doxyfile Makefile.bak latex/
+	@rm -rf $(DOCDIR) Makefile.bak latex/
 	@echo "✓ Cleaned all artifacts including documentation"
 
 # Display help
@@ -81,6 +84,10 @@ help:
 	@echo ""
 	@echo "Build targets:"
 	@echo "  make all           - Build all programs (default)"
+	@echo "  make check         - Check all C sources without linking"
+	@echo "  make test          - Build and run all programs"
+	@echo "  make sanitize      - Rebuild and test with ASan and UBSan"
+	@echo "  make rebuild       - Clean and build all programs"
 	@echo "  make clean         - Remove build artifacts"
 	@echo "  make clean-all     - Remove all generated files"
 	@echo ""
@@ -93,6 +100,8 @@ help:
 	@echo "Info targets:"
 	@echo "  make help          - Display this help message"
 	@echo "  make info          - Show source and executable files"
+	@echo "  make install       - Install programs under PREFIX"
+	@echo "  make uninstall     - Remove programs from PREFIX"
 	@echo ""
 	@echo "Project Programs:"
 	@echo "  • fifo_pipe    - Named pipe (FIFO) communication example"
@@ -124,7 +133,7 @@ check:
 	@echo "🔍 Checking C source files..."
 	@for src in $(SOURCES); do \
 		echo "Checking $$src..."; \
-		$(CC) -fsyntax-only $(CFLAGS) $$src || exit 1; \
+		$(CC) $(CPPFLAGS) $(CFLAGS) -fsyntax-only $$src || exit 1; \
 	done
 	@echo "✓ All files passed syntax check"
 
@@ -132,18 +141,16 @@ check:
 .PHONY: install
 install: all
 	@echo "📦 Installing programs..."
-	@mkdir -p /usr/local/bin
-	@for exe in $(EXECUTABLES); do \
-		install -m 755 $$exe /usr/local/bin/; \
-		echo "✓ Installed $$(basename $$exe)"; \
-	done
+	@$(INSTALL) -d "$(DESTDIR)$(PREFIX)/bin"
+	@$(INSTALL) -m 755 $(EXECUTABLES) "$(DESTDIR)$(PREFIX)/bin"
+	@echo "✓ Installed programs in $(DESTDIR)$(PREFIX)/bin"
 
 # Uninstall
 .PHONY: uninstall
 uninstall:
 	@echo "🗑️  Uninstalling programs..."
 	@for exe in $(EXECUTABLES); do \
-		rm -f /usr/local/bin/$$(basename $$exe); \
+		rm -f "$(DESTDIR)$(PREFIX)/bin/$$(basename $$exe)"; \
 		echo "✓ Removed $$(basename $$exe)"; \
 	done
 
@@ -152,11 +159,27 @@ uninstall:
 test: all
 	@echo "🧪 Running tests..."
 	@echo ""
-	@echo "Test 1: Fork Environment"
+	@echo "Test 1: FIFO communication"
+	@echo "=========================="
+	@$(BINDIR)/fifo_pipe
+	@echo ""
+	@echo "Test 2: Fork Environment"
 	@echo "========================"
 	@$(BINDIR)/fork_env_z1
 	@echo ""
+	@echo "Test 3: Basic fork example"
+	@echo "=========================="
+	@$(BINDIR)/example-1
+	@echo ""
 	@echo "✓ All tests completed"
+
+# Rebuild and run tests with runtime memory and undefined-behavior checks
+.PHONY: sanitize
+sanitize:
+	+@$(MAKE) clean
+	+@$(MAKE) \
+		CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer" \
+		LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test
 
 # Verbose build - show compilation commands
 .PHONY: verbose

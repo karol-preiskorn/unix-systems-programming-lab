@@ -1,258 +1,265 @@
-#include <asm-generic/errno-base.h>
+#define _POSIX_C_SOURCE 200809L
 
-/**
- * Uzupełnij program shell z o „ręczną” obsługę potoków.
- * ----------------------------------------------------
- * Napisz program, który zbiera komunikaty od wielu programów i wyświetla je na ekranie. Do komunikacji użyj potoku nazwanego.
- *
- * Wskazówka: Utwórz program rdfifo, którego zadaniem jest utworzenie kolejki FIFO i czytanie z niej danych.
- * Utwórz program wrfifo, który otwiera kolejkę FIFO tylko do zapisu i wpisuje do niej dane (np. swoj pid i czas).
- *
- * Q: W jaki sposób przekażesz wspólną nazwę kolejki FIFO do tych programów?
- * A: przez zmienną statyczą
- *
- * Q: W jaki sposób zapewnić działanie programu zbierającego komunikaty również wtedy, kiedy nie ma programu piszącego do łącza?
- * A: przez proces pętli nieskończonej ze sleep
- *
- * Q: Jak zapewnić to, że komunikaty pochodzące od różnych programów wyświetlane są w całości, tzn. nie są rozdzielane  komunikatami od innych programów?
- * A: flush? (do sprawdzenia).
- *
- */
-#define DEBUG_MODE
-
-#ifdef DEBUG_MODE
-#define logs(...) printf("[%s](pid %d) DEBUG: Passed %s %d - %s\n", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, ##__VA_ARGS__);
-#define logs_d(...) printf("[%s](pid %d) DEBUG: Passed %s %d - %s : %d\n", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, ##__VA_ARGS__);
-#else
-#define logs(...)
-#endif
-
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <unistd.h>
-#include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
-#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 
-#define FIFOARG 1
-#define PIPE_BUF 100
-#define FIFO_PERMS (S_IRWXU | S_IWGRP| S_IWOTH)
-#define FIFO "temp.fifo"
+#define FIFO_PATH "temp.fifo"
+#define FIFO_PERMS 0666
+#define MESSAGE_COUNT 10
+#define READ_BUFFER_SIZE 4096
+#define WRITER_RETRIES 100
 
-#define BUFFERSIZE 500000
-char buf[BUFFERSIZE]; // read buf
+static volatile sig_atomic_t stop_requested;
 
-char* mygettime() {
-	time_t mytime;
-	mytime = time(NULL);
-	return (ctime(&mytime));
+static void request_stop(int signal_number)
+{
+	(void) signal_number;
+	stop_requested = 1;
 }
 
-/**
- * Serwer read from named pipe
- * -----------------
- * @param argc
- * @param argv
- * @return
- */
-int rdfifo() {
+static int install_signal_handlers(void)
+{
+	struct sigaction action;
 
-	int fifo, var;
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = request_stop;
+	sigemptyset(&action.sa_mask);
 
-	/* There are *two* ways the open can fail: the pipe doesn't exist
-	 * yet, *or* it succeeded, but a different writer already opened
-	 * it but didn't yet remove it.
-	 */
-	logs("reader start");
-	while (1) {
-		logs("while1");
-		while ((fifo = open(FIFO, O_RDONLY)) == -1) {
-			/* Since you didn't specify O_CREAT in the call to open, there
-			 * is no way that FIFO would have been created by the
-			 * reader.  If there *is* now a FIFO, a remove here
-			 * would delete the one the writer created!
-			 */
-			sleep(1);
-		}
+	if (sigaction(SIGINT, &action, NULL) == -1 ||
+			sigaction(SIGTERM, &action, NULL) == -1) {
+		perror("sigaction");
+		return -1;
+	}
 
-		/* Get an exclusive lock on the file, failing if we can't get
-		 * it immediately.  Only one reader will succeed.
-		 */
-		if (flock(fifo, LOCK_EX | LOCK_NB) == 0)
+	return 0;
+}
+
+static int ensure_fifo(void)
+{
+	struct stat status;
+
+	if (mkfifo(FIFO_PATH, FIFO_PERMS) == 0)
+		return 0;
+
+	if (errno != EEXIST) {
+		perror("mkfifo");
+		return -1;
+	}
+
+	if (lstat(FIFO_PATH, &status) == -1) {
+		perror("lstat");
+		return -1;
+	}
+
+	if (!S_ISFIFO(status.st_mode)) {
+		fprintf(stderr, "%s exists but is not a FIFO\n", FIFO_PATH);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int read_fifo(void)
+{
+	char buffer[READ_BUFFER_SIZE];
+	ssize_t bytes_read;
+	int fifo_fd;
+	int result = EXIT_SUCCESS;
+
+	if (ensure_fifo() == -1 || install_signal_handlers() == -1)
+		return EXIT_FAILURE;
+
+	/* O_RDWR keeps the collector alive while no external writer is connected. */
+	fifo_fd = open(FIFO_PATH, O_RDWR);
+	if (fifo_fd == -1) {
+		perror("open FIFO for reading");
+		unlink(FIFO_PATH);
+		return EXIT_FAILURE;
+	}
+
+	while (!stop_requested) {
+		bytes_read = read(fifo_fd, buffer, sizeof(buffer));
+		if (bytes_read > 0) {
+			if (fwrite(buffer, 1, (size_t) bytes_read, stdout) !=
+					(size_t) bytes_read) {
+				perror("write stdout");
+				result = EXIT_FAILURE;
+				break;
+			}
+			fflush(stdout);
+		} else if (bytes_read == -1 && errno != EINTR) {
+			perror("read FIFO");
+			result = EXIT_FAILURE;
 			break;
-
-		/* We lost the race to another reader.  Give up and wait for
-		 * the next writer.
-		 */
-		close(fifo);
-	}
-	/* We are definitely the only reader.
-	 */
-
-	/* *Here* we delete the pipe, now that we've locked it and thus
-	 * know that we "own" the pipe.  If we delete before locking,
-	 * there's a race where after we opened the pipe, a different
-	 * reader also opened, deleted, and locked the file, and a new
-	 * writer created a new pipe; in that case, we'd be deleting the
-	 * wrong pipe.
-	 */
-	logs("Remove FIFO");
-	remove(FIFO);
-	while ((var = read(fifo, buf, BUFFERSIZE)) > 0) {
-		printf("[%s](pid %d) DEBUG: Passed %s %d : reader reads record: %s", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, buf);
-		/* No need to sleep; we'll consume input as it becomes available. */
-	}
-
-	close(fifo);
-	logs("EOF reader");
-	exit(0);
-
-}
-
-/**
- * Klient named pipe
- *
- * write to pipe
- *
- * @param argc
- * @param argv
- * @return
- */
-int wrfifo(pid_t pid) {
-	// time structs
-	time_t rawtime;
-	struct tm * timeinfo;
-
-	int len, i;
-	char buf[PIPE_BUF];
-	int fd;
-	int communicates = 0;
-
-//	if ((unlink(FIFO)) == -1) {
-//		logs("Error unlink FIFO")
-//	} else {
-//		logs("unlink fifo");
-//	}
-
-	if ((mkfifo(FIFO, FIFO_PERMS) == -1) && (errno != EEXIST)) {
-		logs("Server failed to create a FIFO");
-		return (1);
-	} else if (errno == ENOENT) {
-		printf("[%s](pid %d) DEBUG: Passed %s %d : No such file or directory - mkfifo errno: %d\n", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, errno);
-	} else if (errno == EEXIST) {
-		printf("[%s](pid %d) DEBUG: Passed %s %d : mkfifo exist: %d\n", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, errno);
-	} else {
-		printf("[%s](pid %d) DEBUG: Passed %s %d : No such file or directory - mkfifo errno: %d\n", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, errno);
-	}
-
-	if ((fd = open(FIFO, O_WRONLY)) == -1) {
-		logs("Client failed to open log fifo for writing");
-		return (1);
-	} else {
-		logs("pipe opened to read-write");
-	}
-
-	/**
-	 * write some text to pipe
-	 */
-	for (i = 0; i < 10; i++) {
-		sleep(1);
-		//logs("time")
-		time(&rawtime);
-		timeinfo = localtime(&rawtime);
-		sprintf(buf, "#%d test PID: %d: text -> %s", communicates++, (int) getpid(), asctime(timeinfo));
-		len = strlen(buf);
-		if (write(fd, buf, len) != len) {
-			logs("Client failed to write");
-			return (1);
-		} else {
-			printf("[%s](pid %d) DEBUG: Passed %s %d : client succesed write to pipe: %s", __TIME__, (int) getpid(), __FUNCTION__, __LINE__, buf);
 		}
 	}
-	/* Wait for the child process to finish. */
-	waitpid(pid, NULL, 0);
-	sleep(1);
-	logs("close fd");
-	close(fd);
-	return (0);
+
+	if (close(fifo_fd) == -1) {
+		perror("close FIFO");
+		result = EXIT_FAILURE;
+	}
+	if (unlink(FIFO_PATH) == -1 && errno != ENOENT) {
+		perror("unlink FIFO");
+		result = EXIT_FAILURE;
+	}
+
+	return result;
 }
 
-/**
- * main
- *
- * @return
- */
-int main(int argc, char *argv[]) {
-	pid_t pid;
-	int i;
+static int open_fifo_writer(void)
+{
+	const struct timespec retry_delay = { .tv_sec = 0, .tv_nsec = 20000000L };
+	int fifo_fd;
+	int attempt;
 
-	/**
-	 * analiza lini komend
-	 *
-	 */
-	int opt = 0;
-	char *in_fname = NULL;
-	char *out_fname = NULL;
+	for (attempt = 0; attempt < WRITER_RETRIES; ++attempt) {
+		fifo_fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
+		if (fifo_fd != -1)
+			return fifo_fd;
+		if (errno != ENXIO && errno != ENOENT)
+			break;
+		nanosleep(&retry_delay, NULL);
+	}
 
-	/**
-	 * funkcje programu
-	 */
-	while ((opt = getopt(argc, argv, "rwh")) != -1) {
-		switch (opt) {
+	perror("open FIFO for writing");
+	return -1;
+}
+
+static int write_message(int fifo_fd, const char *message, size_t length)
+{
+	ssize_t bytes_written;
+
+	do {
+		bytes_written = write(fifo_fd, message, length);
+	} while (bytes_written == -1 && errno == EINTR);
+
+	if (bytes_written == -1) {
+		perror("write FIFO");
+		return -1;
+	}
+	if ((size_t) bytes_written != length) {
+		fprintf(stderr, "incomplete FIFO write\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int write_fifo(void)
+{
+	char message[256];
+	char timestamp[32];
+	struct tm local_time;
+	time_t current_time;
+	size_t message_length;
+	int fifo_fd;
+	int index;
+	int result = EXIT_SUCCESS;
+
+	if (ensure_fifo() == -1)
+		return EXIT_FAILURE;
+
+	fifo_fd = open_fifo_writer();
+	if (fifo_fd == -1)
+		return EXIT_FAILURE;
+
+	for (index = 0; index < MESSAGE_COUNT; ++index) {
+		current_time = time(NULL);
+		if (localtime_r(&current_time, &local_time) == NULL ||
+				strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S",
+					&local_time) == 0) {
+			fprintf(stderr, "failed to format current time\n");
+			result = EXIT_FAILURE;
+			break;
+		}
+
+		message_length = (size_t) snprintf(message, sizeof(message),
+			"#%d PID %ld: %s\n", index, (long) getpid(), timestamp);
+		if (message_length >= sizeof(message) || message_length > PIPE_BUF) {
+			fprintf(stderr, "FIFO message is too long\n");
+			result = EXIT_FAILURE;
+			break;
+		}
+
+		if (write_message(fifo_fd, message, message_length) == -1) {
+			result = EXIT_FAILURE;
+			break;
+		}
+	}
+
+	if (close(fifo_fd) == -1) {
+		perror("close FIFO");
+		result = EXIT_FAILURE;
+	}
+
+	return result;
+}
+
+static void print_usage(const char *program_name)
+{
+	printf("Usage: %s [-r | -w | -h]\n", program_name);
+	printf("  -r  collect and display messages from the FIFO\n");
+	printf("  -w  write ten messages to an existing collector\n");
+	printf("  -h  display this help\n");
+}
+
+int main(int argc, char *argv[])
+{
+	pid_t reader_pid;
+	int option;
+	int writer_result;
+	int reader_status;
+
+	while ((option = getopt(argc, argv, "rwh")) != -1) {
+		switch (option) {
 		case 'r':
-			in_fname = optarg;
-			printf("\nInput option value=%s set program read from FIFO", in_fname);
-			rdfifo();
-			exit(0);
-			break;
+			return read_fifo();
 		case 'w':
-			out_fname = optarg;
-			printf("\nInput option value=%s set program to write to FIFO", out_fname);
-			wrfifo(pid);
-			exit(0);
-			break;
-		case '?':
-		case 'help':
+			return write_fifo();
 		case 'h':
+			print_usage(argv[0]);
+			return EXIT_SUCCESS;
 		default:
-			printf("\nProgram FIFO\n");
-			printf("------------\n");
-			printf("Program bez argumentów tworzy named pipe a w procesie potomnym zapisuje do niego dane.\n");
-			printf("Program mozna wywołać z argumentami tak aby działał jako odczyt (r) z pipe lub zapis do pipe (w).\n");
-			printf("Zapisywane są do pipe couner, PID i curenttime.\n\n");
-			printf("Usage: %s [-r] [-w]\n\n", argv[0]);
-
-			exit(0);
-			break;
+			print_usage(argv[0]);
+			return EXIT_FAILURE;
 		}
 	}
 
-	logs("start program");
-
-	pid = fork();
-
-	/* proces potomny */
-	if (pid == (pid_t) 0) { /* brak obsługi błędów */
-		/**
-		 * Odczytywanie
-		 */
-		for (i = 0; i < 3; i++) {
-			rdfifo();
-			sleep(1);
-		}
+	if (optind != argc) {
+		print_usage(argv[0]);
+		return EXIT_FAILURE;
 	}
-	/* proces macierzysty */
-	else {
-		for (i = 0; i < 5; i++) {
-			wrfifo(pid);
 
-		}
+	reader_pid = fork();
+	if (reader_pid == -1) {
+		perror("fork");
+		return EXIT_FAILURE;
 	}
-	logs("end main");
-	return (0);
+	if (reader_pid == 0)
+		return read_fifo();
+
+	writer_result = write_fifo();
+	if (kill(reader_pid, SIGTERM) == -1 && errno != ESRCH)
+		perror("kill reader");
+	if (waitpid(reader_pid, &reader_status, 0) == -1) {
+		perror("waitpid");
+		return EXIT_FAILURE;
+	}
+
+	if (writer_result != EXIT_SUCCESS || !WIFEXITED(reader_status) ||
+			WEXITSTATUS(reader_status) != EXIT_SUCCESS)
+		return EXIT_FAILURE;
+
+	return EXIT_SUCCESS;
 }

@@ -1,140 +1,214 @@
-# 📚 README
+# Unix Systems Programming Examples
 
-## 🔌 Complete a shell program with "manual" handling of pipes
+A small collection of C programs for exploring Unix process behavior and
+interprocess communication. The examples cover `fork()`, inherited process
+attributes, environment variables, file descriptors, and named pipes (FIFOs).
 
-This program that collects messages from multiple programs and displays them on the screen. Use a named pipe for communication. 💡 **Hint:** Create an `rdfifo` program whose task is to create a FIFO queue and read data from it.
+## Programs
 
-**❓ FAQ:**
+| Program | Demonstrates |
+| --- | --- |
+| `fifo_pipe` | Communication between a collector and one or more writers through a named FIFO |
+| `fork_env_z1` | Process attributes inherited or changed after `fork()` |
+| `example-1` | Independent parent and child copies of an in-memory counter |
 
-| Question                                                                                                                        | Answer                                        |
-|---------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------|
-| How will you pass the common name of the FIFO queue to these programs?                                                          | Through a static variable                     |
-| How to ensure that the program collecting messages works even when there is no program writing to the link?                     | Through an infinite loop process with `sleep` |
-| How to ensure that messages from different programs are displayed in full, i.e., not separated by messages from other programs? | `flush`? (to be verified)                     |
+## Requirements
 
-### 📤 Output sample
+- A Unix-like operating system with POSIX APIs
+- A C99 compiler such as GCC or Clang
+- GNU Make
+- AddressSanitizer and UndefinedBehaviorSanitizer support for `make sanitize`
+- Doxygen only when regenerating the optional API documentation
 
-```bash
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 73 - while1
+## Quick Start
 
-karol@carlo:~/eclipse-workspaces/unx_sys_programming/Debug$ ./unx_sys_programming -w
-
-Input option value=(null) set program to write to FIFO
-
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 148 : mkfifo exist: 17
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 157 - pipe opened to read-write
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 104 - Remove FIFO
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #0 test PID: 17411: text -> Thu Jan 28 23:36:02 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #0 test PID: 17411: text -> Thu Jan 28 23:36:02 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #1 test PID: 17411: text -> Thu Jan 28 23:36:03 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #1 test PID: 17411: text -> Thu Jan 28 23:36:03 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #2 test PID: 17411: text -> Thu Jan 28 23:36:04 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #2 test PID: 17411: text -> Thu Jan 28 23:36:04 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #3 test PID: 17411: text -> Thu Jan 28 23:36:05 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #3 test PID: 17411: text -> Thu Jan 28 23:36:05 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #4 test PID: 17411: text -> Thu Jan 28 23:36:06 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #4 test PID: 17411: text -> Thu Jan 28 23:36:06 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #5 test PID: 17411: text -> Thu Jan 28 23:36:07 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #5 test PID: 17411: text -> Thu Jan 28 23:36:07 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #6 test PID: 17411: text -> Thu Jan 28 23:36:08 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #6 test PID: 17411: text -> Thu Jan 28 23:36:08 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #7 test PID: 17411: text -> Thu Jan 28 23:36:09 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #7 test PID: 17411: text -> Thu Jan 28 23:36:09 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #8 test PID: 17411: text -> Thu Jan 28 23:36:10 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #8 test PID: 17411: text -> Thu Jan 28 23:36:10 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 174 : client succesed write to pipe: #9 test PID: 17411: text -> Thu Jan 28 23:36:11 2016
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 107 : reader reads record: #9 test PID: 17411: text -> Thu Jan 28 23:36:11 2016
-[23:30:20](pid 17411) DEBUG: Passed wrfifo 180 - close fd
-[23:30:20](pid 17400) DEBUG: Passed rdfifo 112 - EOF reader
-
-[10]   Done                    ./unx_sys_programming -r
-
-bash:~/eclipse-workspaces/unx_sys_programming/Debug$ ./unx_sys_programming -h
-
-FIFO Program
-A program without arguments creates a named pipe and writes data to it in a child process.
-The program can be called with arguments so it works as read (r) from pipe or write to pipe (w).
-A counter, PID and current time are written to the pipe.
-
-Usage: ./unx_sys_programming [-r] [-w]
-```
-
-## 🚀 Usage example
-
-**Basic usage:**
+Build every program and run the test sequence:
 
 ```bash
-./unx_sys_programming
+make
+make test
 ```
 
-**Or use with multiple processes:**
+Executables are created in `bin/`:
+
+```text
+bin/example-1
+bin/fifo_pipe
+bin/fork_env_z1
+```
+
+Run all examples with descriptive headings:
 
 ```bash
-./unx_sys_programming -r
-./unx_sys_programming -w
-./unx_sys_programming -w
-./unx_sys_programming -w
+make run
 ```
 
-# 🔀 Fork read environment - Tasks
+## FIFO Communication
 
-## Task Definitions
+`fifo_pipe` uses `temp.fifo` in the current directory. With no options, the
+program starts its own collector process, sends ten timestamped messages, waits
+for the collector to finish, and removes the FIFO:
 
-- **z1:** 📝 Write a program that shows which attributes of the parent process are inherited by the child process started with the `fork()` function, and which receive new values.
+```bash
+./bin/fifo_pipe
+```
 
-- **z2:** 📝 Write a program that shows which process attributes are preserved after the `exec()` function is executed.
+Example output:
 
-- **z3:** 📝 Write a program that displays the process identifier (PID) and the name of the associated command for all processes started by the user specified in the program's call line.
+```text
+#0 PID 12345: 2026-09-12 10:15:00
+#1 PID 12345: 2026-09-12 10:15:00
+...
+#9 PID 12345: 2026-09-12 10:15:00
+```
 
-💡 **Hint:** This information can be obtained by browsing the `/proc` directory from files (we are interested in directories whose owner is the given user) and the `/proc/PID/status` files
+The reader and writer can also run independently. Start the collector first:
 
-## 📋 Process Attributes
+```bash
+# Terminal 1
+./bin/fifo_pipe -r
 
-Each process is characterized by certain attributes:
+# Terminal 2
+./bin/fifo_pipe -w
+```
 
-| Attribute          | Description                                    |
-|--------------------|------------------------------------------------|
-| 🆔 PID              | Process identifier                             |
-| 👨‍👩‍👧 PPID             | Parent process identifier                      |
-| 👤 Real UID         | Real user identifier of the process owner      |
-| 👥 Real GID         | Real process group identifier                  |
-| ⚡ Effective UID    | Effective user identifier of the process owner |
-| ⚡ Effective GID    | Effective process group identifier             |
-| 📂 Directories      | Current directory and root directory           |
-| 🔐 File mask        | File creation mask                             |
-| 🔌 Session ID       | Session identifier                             |
-| 💻 Terminal         | Controlling terminal                           |
-| 📁 File descriptors | Descriptors of open files                      |
-| 📢 Signal handling  | Signal handling settings                       |
-| 🌍 Environment      | Environment variable settings                  |
-| 💾 Resources        | Resource limits
+Start additional `-w` processes to test multiple producers. Stop the collector
+with `Ctrl+C`; its signal handler closes and removes `temp.fifo`.
 
-## 🧬 Process Inheritance & Differences
+```text
+Usage: ./bin/fifo_pipe [-r | -w | -h]
+  -r  collect and display messages from the FIFO
+  -w  write ten messages to an existing collector
+  -h  display this help
+```
 
-### Inherited Properties
+Each record is smaller than `PIPE_BUF` and is sent with one `write()` call.
+POSIX therefore guarantees that records from concurrent writers are not
+interleaved. The collector opens the FIFO for reading and writing, allowing it
+to remain active when no external writer is connected. A standalone writer
+retries briefly while waiting for a collector and then exits with an error.
 
-The child process inherits many properties from the parent process:
+## Process Inheritance
 
-- Real user identifier, real group identifier
-- Effective user identifier, effective group identifier
-- Additional group identifiers
-- Session identifier, controlling terminal
-- User ID set signal and group ID set signal
-- Open file descriptors (they are copied)
-- Current working directory, root directory
-- File creation mask, signal mask and signal handling dispositions
-- Close-on-exec flag for all open file descriptors
-- Environment, attached shared memory segments
-- System resource limits
+Run the detailed process-attribute example with:
 
-### Key Differences
+```bash
+./bin/fork_env_z1
+```
 
-However, there are certain differences between the parent and child processes:
+The program prints values before `fork()`, in the child, and in the parent after
+the child exits. It demonstrates:
 
-1. **Return value** from `fork()` - different in parent vs child
-2. **Process identifiers** - each process gets a unique PID
-3. **Parent process identifiers** - in the child process this is the parent's PID; in the parent process the PPID doesn't change
-4. **Timing values** - in the child process, `tms_utime`, `tms_cutime` and `tms_ustime` are equal to 0
-5. **File locks** - the child does not inherit file locks established in the parent process
-6. **Pending alarms** - in the child process, all pending alarms are zeroed
-7. **Pending signals** - in the child process, the set of pending signals is zeroed
+- new PID and PPID relationships in the child;
+- inherited user, group, and session identifiers;
+- inherited working directory and file-creation mask;
+- an inherited open descriptor for `/dev/null`;
+- inherited environment data, including `FORK_DEMO`;
+- inherited open-file resource limits; and
+- independent copies of global and automatic variables.
+
+The child increments its copies of the global and automatic values. The parent
+retains the original values, illustrating the separate address spaces created
+by `fork()`.
+
+## Minimal Fork Example
+
+Run the counter example with:
+
+```bash
+./bin/example-1
+```
+
+Both processes increment their own copy of the same counter from 1 through 5.
+Scheduling is controlled by the operating system, so parent and child output
+ordering can vary between runs.
+
+## Make Targets
+
+| Target | Purpose |
+| --- | --- |
+| `make` or `make all` | Build every executable |
+| `make check` | Run compiler syntax and warning checks without linking |
+| `make test` | Build and execute all three examples |
+| `make run` | Run all examples with descriptive headings |
+| `make run-fifo` | Build and run the self-contained FIFO example |
+| `make run-fork` | Build and run the process-inheritance example |
+| `make run-example` | Build and run the minimal counter example |
+| `make sanitize` | Clean, rebuild, and test with ASan and UBSan |
+| `make rebuild` | Remove binaries and build everything again |
+| `make clean` | Remove binaries, object files, and `temp.fifo` |
+| `make clean-all` | Also remove generated Doxygen HTML and LaTeX output |
+| `make info` | List detected sources and resulting executables |
+| `make help` | Display the primary targets |
+| `make verbose` | Build with verbose compiler output |
+| `make install` | Install executables under `PREFIX/bin` |
+| `make uninstall` | Remove installed executables from `PREFIX/bin` |
+
+Build variables can be overridden on the command line:
+
+```bash
+make CC=clang CFLAGS="-Wall -Wextra -std=c99 -O2"
+```
+
+## Installation
+
+The default installation prefix is `/usr/local`, which may require elevated
+permissions:
+
+```bash
+make install
+make uninstall
+```
+
+Install under a user-owned prefix instead:
+
+```bash
+make install PREFIX="$HOME/.local"
+```
+
+Packaging tools can stage files by setting `DESTDIR` separately from the final
+prefix:
+
+```bash
+make install DESTDIR=/tmp/package-root PREFIX=/usr
+make uninstall DESTDIR=/tmp/package-root PREFIX=/usr
+```
+
+## Documentation
+
+The repository includes a Doxygen configuration file and generated HTML/LaTeX
+output. Regenerate it with:
+
+```bash
+doxygen doxy.Doxyfile
+```
+
+`make clean-all` removes generated documentation but preserves
+`doxy.Doxyfile`.
+
+## Project Layout
+
+```text
+.
+|-- Makefile
+|-- README.md
+|-- doxy.Doxyfile
+|-- src/
+|   |-- example-1.c
+|   |-- fifo_pipe.c
+|   `-- fork_env_z1.c
+`-- bin/                 # generated by make
+```
+
+The source wildcard in the Makefile creates one executable for each `src/*.c`
+file. Adding another standalone C source file is therefore enough to include it
+in subsequent builds.
+
+## Remaining Exercises
+
+The process-inheritance example implements the first exercise in the original
+assignment. Two natural extensions are:
+
+1. Demonstrate which process attributes survive an `exec()` call.
+2. Accept a user name and inspect `/proc` to list that user's process IDs and
+   command names.
